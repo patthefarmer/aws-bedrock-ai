@@ -1,0 +1,7 @@
+boto3
+langchain
+numpy
+pandas
+python-dotenv
+streamlit
+streamlit-local-storage
