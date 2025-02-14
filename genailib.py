@@ -1,174 +1,109 @@
 import boto3
-import dotenv
 import json
 import sys
-import re
 import concurrent.futures
 from datetime import datetime
+from dotenv import load_dotenv
 from chatmessage import ChatMessage
 from sources import sources
-from botocore.eventstream import EventStream
 
-dotenv.load_dotenv()
+# Load environment variables
+load_dotenv()
 
-# ⚡ Bedrock Agent Configuration (Optimized for Speed)
-agent_id = "CVH9H4JPAX"
-agent_alias_id = "WTQJJVHLVI"  # ✅ Stored Correctly
-
-# ⚡ Fastest Model: Claude 3 Haiku
-knowledgeBaseId = "BKWDTDREEZ"
-modelarm = "arn:aws:bedrock:eu-west-1:123456789:model/claude-3-haiku"
+# ⚡ Direct Bedrock Model Configuration
+model_id = "eu.anthropic.claude-3-5-sonnet-20240620-v1:0"
 
 # ⚡ Optimized AI Model Parameters
-maxTokens = 300  # ✅ Reduced for speed
-temperature = 0.5  # ✅ Lower for deterministic responses
-topP = 0.85  # ✅ Slightly reduced for efficiency
-MAX_MESSAGES = 20  # ✅ Reduced to prevent memory overhead
+max_tokens_to_sample = 300
+temperature = 0.5
+top_p = 0.85
+MAX_MESSAGES = 20  # ✅ Keeps chat history manageable
 
-# ⚡ Initialize Bedrock Client (Using Persistent Connection for Speed)
-agent = boto3.client(service_name="bedrock-agent-runtime", region_name="eu-west-1")
+# ⚡ Initialize Bedrock Client
+bedrock_client = boto3.client(service_name="bedrock-runtime", region_name="eu-west-1")
 
-# 🚀 Fast EventStream Processing
-def process_event_stream(event_stream):
-    """Extracts and processes text content from an EventStream response."""
-    full_response = []
-
-    try:
-        for event in event_stream:
-            if "chunk" in event and "bytes" in event["chunk"]:
-                chunk_text = event["chunk"]["bytes"].decode("utf-8")
-                sys.stdout.write(chunk_text)
-                sys.stdout.flush()
-                full_response.append(chunk_text)  # ✅ Collect response text
-
-        print("\n")
-    except Exception as e:
-        print(f"❌ Error processing EventStream: {str(e)}")
-
-    return "".join(full_response).strip()
-
-# 🚀 Remove Unnecessary AI Disclaimers
-def clean_ai_response(response_text):
-    """Removes AI-generated disclaimers and ensures direct factual responses."""
-    apology_phrases = [
-        r"Sorry, I am unable to assist you with this request.*?",
-        r"I cannot provide that information.*?",
-        r"I'm unable to help with that request.*?",
-        r"I apologize that I couldn't find this specific information.*?",
-        r"I couldn't find this in the knowledge base.*?",
-        r"This information is based on general knowledge.*?",
-        r"If you need more specific details, please let me know.*?"
-    ]
-    for phrase in apology_phrases:
-        response_text = re.sub(phrase, "", response_text, flags=re.IGNORECASE).strip()
-    return response_text
-
-# 🚀 Run Knowledge Base Query (Parallel Processing Enabled)
-def run_query_with_knowledge_base(prompt, session_id=None):
-    """Queries Amazon Bedrock AI Agent with knowledge base first."""
-    print("\n🔍 **Calling Bedrock Agent - Searching Knowledge Base...**\n")
-
-    try:
-        response = agent.retrieve_and_generate(
-            input={"text": prompt},
-            retrieveAndGenerateConfiguration={
-                "knowledgeBaseConfiguration": {
-                    "generationConfiguration": {
-                        "inferenceConfig": {
-                            "textInferenceConfig": {
-                                "maxTokens": maxTokens,
-                                "temperature": temperature,
-                                "topP": topP
-                            }
-                        }
-                    },
-                    "knowledgeBaseId": knowledgeBaseId,
-                    "modelArn": modelarm,
-                    "orchestrationConfiguration": {
-                        "queryTransformationConfiguration": {
-                            "type": "QUERY_DECOMPOSITION"
-                        }
-                    }
-                },
-                "type": "KNOWLEDGE_BASE"
-            }
-        )
-
-        print("\n🔍 **Raw API Response (Knowledge Base):**\n", json.dumps(response, indent=4))
-
-        # ✅ Extract response text
-        output = response.get("output", {}).get("text", "").strip()
-
-        # ✅ Detect unhelpful KB responses and fall back to AI model immediately
-        if (
-            not output or 
-            "Sorry, I am unable to assist" in output or
-            "I could not find" in output or 
-            "The search results do not contain" in output
-        ):
-            print("\n⚠️ **No Useful Answer in KB - Switching to AI Model**\n")
-            return run_query_with_ai_model(prompt, session_id)
-
-        return ChatMessage("assistant", output), response.get("sessionId", "UnknownSession")
-
-    except Exception as e:
-        print(f"⚠️ Error retrieving from Knowledge Base: {str(e)}")
-        return run_query_with_ai_model(prompt, session_id)
-
-# 🚀 Direct AI Model Query (Parallel Processing Enabled)
-def run_query_with_ai_model(prompt, session_id=None):
-    """Fallback method: Uses AI Model if no KB results are found."""
-    print("\n🔍 **Calling Bedrock Agent - AI Model Response...**\n")
-
+# 🚀 Streaming AI Model Query with Memory (FIXED DUPLICATION)
+def run_query_with_ai_model(prompt, message_history, session_id=None):
+    """Queries Amazon Bedrock AI Model using a streaming response with memory."""
+    print("\n🔍 **Calling Bedrock AI Model - Streaming Response...**\n")
     session_id = session_id or "default-session"
 
-    try:
-        bedrock_agent_runtime_client = boto3.client("bedrock-agent-runtime", region_name="eu-west-1")
+    # ✅ Keep last `MAX_MESSAGES * 2` exchanges for memory, **excluding empty messages**
+    messages = [
+        {"role": msg.role, "content": msg.text}
+        for msg in message_history[-MAX_MESSAGES * 2:] if msg.text.strip()
+    ]
 
-        response = bedrock_agent_runtime_client.invoke_agent(
-            agentId=agent_id,
-            agentAliasId=agent_alias_id,
-            sessionId=session_id,
-            inputText=prompt,
-            enableTrace=False,
-            endSession=False
+    # ✅ Append current user message
+    messages.append({"role": "user", "content": prompt})
+
+    try:
+        # ✅ Use `invoke_model_with_response_stream()` for real-time streaming
+        response = bedrock_client.invoke_model_with_response_stream(
+            modelId=model_id,
+            body=json.dumps({
+                "anthropic_version": "bedrock-2023-05-31",
+                "system": "You are a livestock advisory for the Herdwatch livestock management app.\nHere are some relevant sources to check first:\n'https://help.herdwatch.com/en/'\n",
+                "messages": messages,  # ✅ Pass full conversation history, **excluding empty messages**
+                "max_tokens": max_tokens_to_sample,
+                "temperature": temperature,
+                "top_p": top_p
+            })
         )
 
-        print("\n🔍 **Raw API Response (AI Model) [Optimized]:**")
-        response_copy = {key: str(value) if isinstance(value, EventStream) else value 
-                         for key, value in response.items()}
-        print(json.dumps(response_copy, indent=4))
+        # ✅ Initialize streaming output
+        print("\n🟢 **Streaming response from Claude...**\n")
+        streamed_response = ""
 
-        # ✅ Use EventStream for Faster Processing
-        if "completion" in response and isinstance(response["completion"], EventStream):
-            print("\n🔍 **Processing EventStream Response Faster...**")
-            full_response = process_event_stream(response["completion"])
-        else:
-            full_response = response.get("completion", {}).get("outputText", "No response text available")
+        for event in response["body"]:
+            print(f"🔹 Raw event received: {event}")
 
-        # ✅ Ensure AI provides factual responses
-        full_response = clean_ai_response(full_response)
+            if "chunk" in event and "bytes" in event["chunk"]:
+                chunk_data = event["chunk"]["bytes"].decode("utf-8")  # Decode bytes
+                print(f"🔹 Decoded chunk: {chunk_data}")
 
-        return ChatMessage("assistant", full_response), response.get("sessionId", session_id)
+                try:
+                    chunk_json = json.loads(chunk_data)
+                    if "content_block_delta" in chunk_json.get("type", ""):
+                        text_chunk = chunk_json["delta"].get("text", "")
+
+                        streamed_response += text_chunk
+                        yield text_chunk  # ✅ Stream **each chunk dynamically** (NO DUPLICATION)
+
+                except json.JSONDecodeError as json_err:
+                    print(f"⚠️ JSON Decode Error: {json_err}")
 
     except Exception as e:
         print(f"❌ Error calling Bedrock AI Model: {str(e)}")
-        return ChatMessage("assistant", "An error occurred while processing your request."), session_id
+        yield "An error occurred while processing your request."
 
-# 🚀 Optimized Chat Function with Parallel Execution
+# 🚀 Optimized Chat Function with Memory (NO DUPLICATION)
 def chat_with_model(message_history, new_text, session_id=None):
-    """Handles AI chat session with optimized execution."""
-    new_text_message = ChatMessage("user", text=new_text)
+    """Handles AI chat session with memory and streaming."""
+
+    # ✅ Append user message **once**
+    new_text_message = ChatMessage("user", new_text)
     message_history.append(new_text_message)
 
-    if len(message_history) > MAX_MESSAGES:
-        del message_history[0 : (len(message_history) - MAX_MESSAGES) * 2]
+    # ✅ Ensure history doesn't exceed limits
+    if len(message_history) > MAX_MESSAGES * 2:
+        del message_history[: len(message_history) - MAX_MESSAGES * 2]
 
-    # ✅ Run KB and AI Model in Parallel for Speed
+    # ✅ **Fixed**: Don't add an empty assistant message
+    assistant_message = ChatMessage("assistant", "...")
+    message_history.append(assistant_message)  # ✅ Use placeholder text instead of empty string
+
     with concurrent.futures.ThreadPoolExecutor() as executor:
-        future_kb = executor.submit(run_query_with_knowledge_base, new_text, session_id)
-        response_message, session_id = future_kb.result()  # Get the fastest result
+        future_model = executor.submit(run_query_with_ai_model, new_text, message_history, session_id)
 
-    message_history.append(response_message)
+        # ✅ Stream the response live (NO DUPLICATION)
+        streamed_response = ""
+        for response_chunk in future_model.result():
+            streamed_response += response_chunk
+            yield response_chunk  # ✅ Stream dynamically, **NO extra response at the end**
 
-    return session_id
+        # ✅ Instead of appending another message, update the assistant message
+        message_history[-1].text = streamed_response  # ✅ Modify last assistant message instead of adding a new one
+
+        # ✅ Debugging - Check final stored message
+        print(f"🔍 Final Assistant Message: {message_history[-1].text}")
