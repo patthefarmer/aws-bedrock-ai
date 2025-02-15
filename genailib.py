@@ -15,7 +15,7 @@ model_id = "eu.anthropic.claude-3-5-sonnet-20240620-v1:0"
 
 # ⚡ Optimized AI Model Parameters
 max_tokens_to_sample = 2000
-temperature = 0.9
+temperature = 0.7
 top_p = 0.85
 MAX_MESSAGES = 20  # ✅ Keeps chat history manageable
 
