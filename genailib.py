@@ -16,7 +16,7 @@ knowledge_base_id = "BKWDTDREEZ"  # ✅ AWS Knowledge Base ID
 
 # ⚡ Optimized AI Model Parameters
 max_tokens_to_sample = 2000
-temperature = 0.8
+temperature = 0.9
 top_p = 0.8
 MAX_MESSAGES = 20  # ✅ Keeps chat history manageable
 
