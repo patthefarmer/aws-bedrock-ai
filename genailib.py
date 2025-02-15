@@ -43,7 +43,7 @@ def run_query_with_ai_model(prompt, message_history, session_id=None):
             modelId=model_id,
             body=json.dumps({
                 "anthropic_version": "bedrock-2023-05-31",
-                "system": "You are a livestock advisory for the Herdwatch livestock management app.\nHere are some relevant sources to check first:\n'https://help.herdwatch.com/en/'\n",
+                "system": "You are a livestock advisory for the Herdwatch livestock management app.\nHere are some relevant sources to check first:\n'https://help.herdwatch.com/en/'\n'https://herdwatch.com/'\n",
                 "messages": messages,  # ✅ Pass full conversation history, **excluding empty messages**
                 "max_tokens": max_tokens_to_sample,
                 "temperature": temperature,
